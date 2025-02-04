@@ -251,8 +251,8 @@ if env.bool("POSTGRES_SSL_ENABLED", False):
         "sslrootcert": env.path("POSTGRES_SSL_ROOTCERT"),
     }
 
-    POSTGRES_SSL_CERT = env.path("POSTGRES_SSL_CERT", default=None)
-    POSTGRES_SSL_KEY = env.path("POSTGRES_SSL_KEY", default=None)
+    POSTGRES_SSL_CERT = env.path("POSTGRES_SSL_CERT", default="")
+    POSTGRES_SSL_KEY = env.path("POSTGRES_SSL_KEY", default="")
 
     if POSTGRES_SSL_CERT and POSTGRES_SSL_KEY:
         DATABASES["default"]["OPTIONS"]["sslcert"] = POSTGRES_SSL_CERT
