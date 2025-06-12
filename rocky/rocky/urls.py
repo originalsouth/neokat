@@ -24,7 +24,6 @@ from rocky.views.ooi_list import OOIListExportView, OOIListView
 from rocky.views.ooi_mute import MuteFindingsBulkView, MuteFindingView
 from rocky.views.ooi_tree import OOIGraphView, OOISummaryView, OOITreeView
 from rocky.views.organization_add import OrganizationAddView
-from rocky.views.organization_crisis_room import OrganizationCrisisRoomView
 from rocky.views.organization_edit import OrganizationEditView
 from rocky.views.organization_list import OrganizationListView
 from rocky.views.organization_member_add import (
@@ -43,8 +42,10 @@ from rocky.views.task_detail import BoefjeTaskDetailView, DownloadTaskDetail, No
 from rocky.views.tasks import (
     AllBoefjesTaskListView,
     AllNormalizersTaskListView,
+    AllReportsTaskListView,
     BoefjesTaskListView,
     NormalizersTaskListView,
+    ReportsTaskListView,
 )
 from rocky.views.upload_csv import UploadCSV
 from rocky.views.upload_raw import UploadRaw
@@ -75,6 +76,7 @@ urlpatterns += i18n_patterns(
     path("tasks/", AllBoefjesTaskListView.as_view(), name="all_task_list"),
     path("tasks/boefjes", AllBoefjesTaskListView.as_view(), name="all_boefjes_task_list"),
     path("tasks/normalizers", AllNormalizersTaskListView.as_view(), name="all_normalizers_task_list"),
+    path("tasks/reports", AllReportsTaskListView.as_view(), name="all_reports_task_list"),
     path(
         "<organization_code>/settings/indemnifications/", IndemnificationAddView.as_view(), name="indemnification_add"
     ),
@@ -106,7 +108,6 @@ urlpatterns += i18n_patterns(
         name="download_organization_member_template",
     ),
     path("<organization_code>/members/upload/", MembersUploadView.as_view(), name="organization_member_upload"),
-    path("<organization_code>/", OrganizationCrisisRoomView.as_view(), name="organization_crisis_room"),
     path("<organization_code>/settings", OrganizationSettingsView.as_view(), name="organization_settings"),
     path("<organization_code>/members", OrganizationMemberListView.as_view(), name="organization_member_list"),
     path(
@@ -135,6 +136,7 @@ urlpatterns += i18n_patterns(
     path("<organization_code>/tasks/boefjes", BoefjesTaskListView.as_view(), name="boefjes_task_list"),
     path("<organization_code>/tasks/boefjes/<task_id>", BoefjeTaskDetailView.as_view(), name="boefje_task_view"),
     path("<organization_code>/tasks/normalizers", NormalizersTaskListView.as_view(), name="normalizers_task_list"),
+    path("<organization_code>/tasks/reports", ReportsTaskListView.as_view(), name="reports_task_list"),
     path(
         "<organization_code>/tasks/normalizers/<task_id>", NormalizerTaskJSONView.as_view(), name="normalizer_task_view"
     ),

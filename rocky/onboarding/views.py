@@ -4,6 +4,7 @@ from typing import Any
 from account.forms import MemberRegistrationForm, OnboardingOrganizationUpdateForm, OrganizationForm
 from account.mixins import OrganizationPermissionRequiredMixin, OrganizationView
 from account.views import OOIClearanceMixin
+from crisis_room.management.commands.dashboards import run_findings_dashboard
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import PermissionRequiredMixin
@@ -39,7 +40,6 @@ from onboarding.view_helpers import (
 )
 from rocky.exceptions import RockyError
 from rocky.messaging import clearance_level_warning_dns_report
-from rocky.scheduler import scheduler_client
 from rocky.views.indemnification_add import IndemnificationAddView
 from rocky.views.ooi_view import SingleOOIMixin, SingleOOITreeMixin
 from rocky.views.scheduler import SchedulerView
@@ -327,17 +327,13 @@ class OnboardingSetupScanOOIDetailView(
     permission_required = "tools.can_scan_organization"
     task_type = "report"
 
-    @staticmethod
-    def is_scheduler_enabled(organization: Organization) -> bool:
-        scheduler_id = f"report-{organization.code}"
-        return scheduler_client(organization.code).is_scheduler_ready(scheduler_id)
-
     def post(self, request, *args, **kwargs):
         report_name_format = self.get_initial_report_name()
         parent_report_type = self.get_parent_report_type()
         report_recipe = self.create_report_recipe(report_name_format, parent_report_type, None)
-        if self.is_scheduler_enabled(self.organization):
-            self.create_report_schedule(report_recipe, datetime.now(timezone.utc) + timedelta(minutes=2))
+
+        self.create_report_schedule(report_recipe, datetime.now(timezone.utc) + timedelta(minutes=2))
+        run_findings_dashboard(self.organization)
 
         return redirect(
             reverse("step_report", kwargs={"organization_code": self.organization.code})

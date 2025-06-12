@@ -127,8 +127,8 @@ class OctopoesService:
         self,
         types: set[type[OOI]],
         valid_time: datetime,
-        limit: int = DEFAULT_LIMIT,
         offset: int = DEFAULT_OFFSET,
+        limit: int = DEFAULT_LIMIT,
         scan_levels: set[ScanLevel] = DEFAULT_SCAN_LEVEL_FILTER,
         scan_profile_types: set[ScanProfileType] = DEFAULT_SCAN_PROFILE_TYPE_FILTER,
         search_string: str | None = None,
@@ -136,7 +136,7 @@ class OctopoesService:
         asc_desc: Literal["asc", "desc"] = "asc",
     ) -> Paginated[OOI]:
         paginated = self.ooi_repository.list_oois(
-            types, valid_time, limit, offset, scan_levels, scan_profile_types, search_string, order_by, asc_desc
+            types, valid_time, offset, limit, scan_levels, scan_profile_types, search_string, order_by, asc_desc
         )
         self._populate_scan_profiles(paginated.items, valid_time)
         return paginated
@@ -264,21 +264,19 @@ class OctopoesService:
         # fetch all scan profiles
         all_scan_profiles = self.scan_profile_repository.list_scan_profiles(None, valid_time=valid_time)
 
-        # cache all declared
-        all_declared_scan_profiles = {
-            scan_profile for scan_profile in all_scan_profiles if isinstance(scan_profile, DeclaredScanProfile)
-        }
-        # cache all inherited
-        inherited_scan_profiles = {
-            scan_profile.reference: scan_profile
-            for scan_profile in all_scan_profiles
-            if isinstance(scan_profile, InheritedScanProfile)
-        }
+        all_declared_scan_profiles: set[DeclaredScanProfile] = set()
+        inherited_scan_profiles: dict[Reference, InheritedScanProfile] = {}
+        assigned_scan_levels: dict[Reference, ScanLevel] = {}
+        source_scan_profile_references: set[Reference] = set()
 
-        # track all scan level assignments
-        assigned_scan_levels: dict[Reference, ScanLevel] = {
-            scan_profile.reference: scan_profile.level for scan_profile in all_declared_scan_profiles
-        }
+        # fill profile caches
+        for scan_profile in all_scan_profiles:
+            if isinstance(scan_profile, DeclaredScanProfile):
+                all_declared_scan_profiles.add(scan_profile)
+                assigned_scan_levels[scan_profile.reference] = scan_profile.level
+                source_scan_profile_references.add(scan_profile.reference)
+            elif isinstance(scan_profile, InheritedScanProfile):
+                inherited_scan_profiles[scan_profile.reference] = scan_profile
 
         for current_level in range(4, 0, -1):
             # start point: all scan profiles with current level + all higher scan levels
@@ -331,7 +329,6 @@ class OctopoesService:
 
         # Save all assigned scan levels
         update_count = 0
-        source_scan_profile_references = {sp.reference for sp in all_declared_scan_profiles}
         for reference, scan_level in assigned_scan_levels.items():
             # Skip source scan profiles
             if reference in source_scan_profile_references:

@@ -102,7 +102,7 @@ class AppContext:
                     structlog.dev.set_exc_info,
                     structlog.stdlib.PositionalArgumentsFormatter(),
                     structlog.processors.TimeStamper("iso", utc=False),
-                    structlog.dev.ConsoleRenderer(),
+                    structlog.dev.ConsoleRenderer(pad_level=False, exception_formatter=structlog.dev.plain_traceback),
                 ],
                 context_class=dict,
                 # `logger_factory` is used to create wrapped loggers that are used
@@ -118,13 +118,16 @@ class AppContext:
 
         self.logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
+        # Set the logging level
+        if self.config.debug:
+            self.logger.setLevel(logging.DEBUG)
+
         # Services
         katalogus_service = clients.Katalogus(
             host=remove_trailing_slash(str(self.config.host_katalogus)),
             source=f"scheduler/{scheduler.__version__}",
             timeout=self.config.katalogus_request_timeout,
             pool_connections=self.config.katalogus_pool_connections,
-            cache_ttl=self.config.katalogus_cache_ttl,
         )
 
         bytes_service = clients.Bytes(
@@ -184,7 +187,6 @@ class AppContext:
                 "pq_maxsize": str(self.config.pq_maxsize),
                 "pq_grace_period": str(self.config.pq_grace_period),
                 "pq_max_random_objects": str(self.config.pq_max_random_objects),
-                "katalogus_cache_ttl": str(self.config.katalogus_cache_ttl),
                 "monitor_organisations_interval": str(self.config.monitor_organisations_interval),
             }
         )

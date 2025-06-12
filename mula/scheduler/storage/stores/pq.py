@@ -1,8 +1,11 @@
 from uuid import UUID
 
+from sqlalchemy import exc
+from sqlalchemy.orm.query import Query
+
 from scheduler import models
 from scheduler.storage import DBConn
-from scheduler.storage.errors import exception_handler
+from scheduler.storage.errors import StorageError, exception_handler
 from scheduler.storage.filters import FilterRequest, apply_filter
 from scheduler.storage.utils import retry
 
@@ -13,27 +16,74 @@ class PriorityQueueStore:
     def __init__(self, dbconn: DBConn) -> None:
         self.dbconn = dbconn
 
+    def build_pop_query(self, session, scheduler_id: str | None = None, filters: FilterRequest | None = None) -> Query:
+        query = session.query(models.TaskDB).filter(models.TaskDB.status == models.TaskStatus.QUEUED)
+
+        if scheduler_id is not None:
+            query = query.filter(models.TaskDB.scheduler_id == scheduler_id)
+
+        if filters is not None:
+            query = apply_filter(models.TaskDB, query, filters)
+
+        return query
+
     @retry()
     @exception_handler
-    def pop(self, scheduler_id: str, filters: FilterRequest | None = None) -> models.Task | None:
+    def pop(
+        self, scheduler_id: str | None = None, limit: int | None = None, filters: FilterRequest | None = None
+    ) -> list[models.Task]:
         with self.dbconn.session.begin() as session:
-            query = (
-                session.query(models.TaskDB)
-                .filter(models.TaskDB.status == models.TaskStatus.QUEUED)
-                .order_by(models.TaskDB.priority.asc())
-                .order_by(models.TaskDB.created_at.asc())
-                .filter(models.TaskDB.scheduler_id == scheduler_id)
-            )
+            query = self.build_pop_query(session, scheduler_id, filters)
 
-            if filters is not None:
-                query = apply_filter(models.TaskDB, query, filters)
+            try:
+                item_orm = (
+                    query.order_by(models.TaskDB.priority.asc())
+                    .order_by(models.TaskDB.created_at.asc())
+                    .limit(limit)
+                    .all()
+                )
+            except exc.ProgrammingError as e:
+                raise StorageError(f"Invalid filter: {e}") from e
 
-            item_orm = query.first()
+            items = [models.Task.model_validate(item_orm) for item_orm in item_orm]
 
-            if item_orm is None:
-                return None
+            return items
 
-            return models.Task.model_validate(item_orm)
+    def pop_boefje(
+        self, scheduler_id: str | None = None, limit: int | None = None, filters: FilterRequest | None = None
+    ) -> list[models.Task]:
+        """Custom pop method for the `BoefjeScheduler`"""
+        with self.dbconn.session.begin() as session:
+            query = self.build_pop_query(session, scheduler_id, filters)
+
+            try:
+                dkey = (
+                    query.filter(models.TaskDB.data["deduplication_key"].astext is not None)
+                    .order_by(models.TaskDB.priority.asc())
+                    .order_by(models.TaskDB.created_at.asc())
+                    .all()
+                )
+                if len(dkey) == 0:
+                    # No tasks with a deduplication key, fall back to the default pop
+                    return self.pop(scheduler_id, limit, filters)
+
+                # Get the first task with a deduplication key
+                first_dkey = dkey[0].data["deduplication_key"]
+
+                # Filter the query to only include tasks with the same deduplication key
+                item_orm = (
+                    query.filter(models.TaskDB.data["deduplication_key"].astext == first_dkey)
+                    .order_by(models.TaskDB.priority.asc())
+                    .order_by(models.TaskDB.created_at.asc())
+                    .limit(limit)
+                    .all()
+                )
+            except exc.ProgrammingError as e:
+                raise StorageError(f"Invalid filter: {e}") from e
+
+            items = [models.Task.model_validate(item_orm) for item_orm in item_orm]
+
+            return items
 
     @retry()
     @exception_handler
@@ -187,4 +237,15 @@ class PriorityQueueStore:
                 .filter(models.TaskDB.status == models.TaskStatus.QUEUED)
                 .filter(models.TaskDB.scheduler_id == scheduler_id)
                 .delete(),
+            )
+
+    @retry()
+    @exception_handler
+    def bulk_update_status(self, scheduler_id: str, item_ids: list[UUID], status: models.TaskStatus) -> None:
+        with self.dbconn.session.begin() as session:
+            (
+                session.query(models.TaskDB)
+                .filter(models.TaskDB.scheduler_id == scheduler_id)
+                .filter(models.TaskDB.id.in_([str(item_id) for item_id in item_ids]))
+                .update({"status": status.name}, synchronize_session=False),
             )

@@ -41,7 +41,6 @@ class TaskListView(SchedulerView, SchedulerListView, PageActionsView):
         context = super().get_context_data(**kwargs)
         context["task_filter_form"] = self.get_task_filter_form()
         context["active_filters_counter"] = self.count_active_task_filters()
-        context["stats"] = self.get_task_statistics()
         context["breadcrumbs"] = [
             {"url": reverse("task_list", kwargs={"organization_code": self.organization.code}), "text": _("Tasks")}
         ]
@@ -52,6 +51,18 @@ class BoefjesTaskListView(TaskListView):
     template_name = "tasks/boefjes.html"
     task_type = "boefje"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["stats"] = self.get_task_statistics()
+        context["breadcrumbs"] = [
+            {"url": reverse("task_list", kwargs={"organization_code": self.organization.code}), "text": _("Tasks")},
+            {
+                "url": reverse("boefjes_task_list", kwargs={"organization_code": self.organization.code}),
+                "text": _("Boefjes"),
+            },
+        ]
+        return context
+
 
 class NormalizersTaskListView(TaskListView):
     template_name = "tasks/normalizers.html"
@@ -59,15 +70,23 @@ class NormalizersTaskListView(TaskListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        context["stats"] = self.get_task_statistics()
+        context["breadcrumbs"] = [
+            {"url": reverse("task_list", kwargs={"organization_code": self.organization.code}), "text": _("Tasks")},
+            {
+                "url": reverse("normalizers_task_list", kwargs={"organization_code": self.organization.code}),
+                "text": _("Normalizers"),
+            },
+        ]
 
-        # Search for the corresponding Boefje names and add those to the task_list
-        task_list = context["task_list"]
-        ids = [
+        # Search for the corresponding Normalizer names and add those to the task_list
+        task_list = context.get("task_list", [])
+        ids = {
             task.data.raw_data.boefje_meta.boefje.id
             for task in task_list
             if task.data.raw_data.boefje_meta.boefje.id != "manual"
-        ]
-        plugins = self.get_katalogus().get_plugins(ids=ids)
+        }
+        plugins = self.get_katalogus().get_plugins(ids=list(ids))
         plugin_dict = {p.id: p.name for p in plugins}
 
         for task in task_list:
@@ -77,26 +96,50 @@ class NormalizersTaskListView(TaskListView):
         return context
 
 
+class ReportsTaskListView(TaskListView):
+    template_name = "tasks/reports.html"
+    task_type = "report"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["stats"] = self.get_task_statistics()
+        context["breadcrumbs"] = [
+            {"url": reverse("task_list", kwargs={"organization_code": self.organization.code}), "text": _("Tasks")},
+            {
+                "url": reverse("reports_task_list", kwargs={"organization_code": self.organization.code}),
+                "text": _("Reports"),
+            },
+        ]
+        return context
+
+
 class AllTaskListView(SchedulerListView, PageActionsView):
     paginator_class = RockyPaginator
-    paginate_by = 20
+    paginate_by = 150
     context_object_name = "task_list"
     client = scheduler_client(None)
     task_filter_form = TaskFilterForm
 
+    def get_user_organizations(self) -> list[str]:
+        return [org.code for org in self.request.user.organizations]
+
+    def get_organization_filter(self) -> dict[str, dict[str, list[dict[str, str | list[str]]]]]:
+        if self.request.user.has_perm("tools.can_access_all_organizations"):
+            # We don't need to add a filter if the user can access all organizations
+            return {}
+
+        return {
+            "filters": {
+                "filters": [{"column": "organisation", "operator": "in", "value": self.get_user_organizations()}]
+            }
+        }
+
     def get_queryset(self):
-        task_type = self.request.GET.get("type", self.task_type)
-        self.schedulers = [f"{task_type}-{o.code}" for o in self.request.user.organizations]
         form_data = self.task_filter_form(self.request.GET).data.dict()
-        kwargs = {k: v for k, v in form_data.items() if v}
+        kwargs = {k: v for k, v in form_data.items() if v} | self.get_organization_filter()
 
         try:
-            return LazyTaskList(
-                self.client,
-                task_type=task_type,
-                filters={"filters": [{"column": "scheduler_id", "operator": "in", "value": self.schedulers}]},
-                **kwargs,
-            )
+            return LazyTaskList(self.client, task_type=self.task_type, **kwargs)
 
         except HTTPError as error:
             error_message = _(f"Fetching tasks failed: no connection with scheduler: {error}")
@@ -109,7 +152,10 @@ class AllTaskListView(SchedulerListView, PageActionsView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["task_filter_form"] = self.task_filter_form(self.request.GET)
-        context["stats"] = self.client.get_combined_schedulers_stats(scheduler_ids=self.schedulers)
+        if self.request.user.has_perm("tools.can_access_all_organizations"):
+            context["stats"] = self.client.get_task_stats_for_all_organizations(self.task_type)
+        else:
+            context["stats"] = self.client.get_combined_schedulers_stats(self.task_type, self.get_user_organizations())
         context["breadcrumbs"] = [{"url": reverse("all_task_list", kwargs={}), "text": _("All Tasks")}]
         return context
 
@@ -122,3 +168,8 @@ class AllBoefjesTaskListView(AllTaskListView):
 class AllNormalizersTaskListView(AllTaskListView):
     template_name = "tasks/normalizers.html"
     task_type = "normalizer"
+
+
+class AllReportsTaskListView(AllTaskListView):
+    template_name = "tasks/reports.html"
+    task_type = "report"

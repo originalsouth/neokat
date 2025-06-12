@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import exc, func
+from sqlalchemy import desc, exc, func
 
 from scheduler import models
 from scheduler.storage import DBConn
@@ -20,6 +20,7 @@ class TaskStore:
     def get_tasks(
         self,
         scheduler_id: str | None = None,
+        organisation: str | None = None,
         task_type: str | None = None,
         status: str | None = None,
         min_created_at: datetime | None = None,
@@ -33,6 +34,9 @@ class TaskStore:
 
             if scheduler_id is not None:
                 query = query.filter(models.TaskDB.scheduler_id == scheduler_id)
+
+            if organisation is not None:
+                query = query.filter(models.TaskDB.organisation == organisation)
 
             if task_type is not None:
                 query = query.filter(models.TaskDB.type == task_type)
@@ -136,7 +140,9 @@ class TaskStore:
 
     @retry()
     @exception_handler
-    def get_status_count_per_hour(self, scheduler_id: str | None = None) -> dict[str, dict[str, int]] | None:
+    def get_status_count_per_hour(
+        self, scheduler_id: str | None = None, organisation_id: str | None = None
+    ) -> dict[str, dict[str, int]] | None:
         with self.dbconn.session.begin() as session:
             query = (
                 session.query(
@@ -146,14 +152,18 @@ class TaskStore:
                 )
                 .filter(models.TaskDB.modified_at >= datetime.now(timezone.utc) - timedelta(hours=24))
                 .group_by("hour", models.TaskDB.status)
-                .order_by("hour", models.TaskDB.status)
+                .order_by(desc("hour"), models.TaskDB.status)
             )
 
             if scheduler_id is not None:
                 query = query.filter(models.TaskDB.scheduler_id == scheduler_id)
 
+            if organisation_id is not None:
+                query = query.filter(models.TaskDB.organisation == organisation_id)
+
             results = query.all()
 
+            # We rely on the dict insertion order
             response: dict[str, dict[str, int]] = {}
             for row in results:
                 date, status, task_count = row
@@ -166,7 +176,9 @@ class TaskStore:
 
     @retry()
     @exception_handler
-    def get_status_counts(self, scheduler_id: str | None = None) -> dict[str, int] | None:
+    def get_status_counts(
+        self, scheduler_id: str | None = None, organisation_id: str | None = None
+    ) -> dict[str, int] | None:
         with self.dbconn.session.begin() as session:
             query = (
                 session.query(models.TaskDB.status, func.count(models.TaskDB.id).label("count"))
@@ -176,6 +188,9 @@ class TaskStore:
 
             if scheduler_id is not None:
                 query = query.filter(models.TaskDB.scheduler_id == scheduler_id)
+
+            if organisation_id is not None:
+                query = query.filter(models.TaskDB.organisation == organisation_id)
 
             results = query.all()
 

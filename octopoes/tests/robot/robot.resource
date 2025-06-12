@@ -17,8 +17,7 @@ ${QUEUE_URI}                        amqp://ci_user:ci_pass@localhost:29004/kat
 ${RABBIT_MQ_API_URI}                http://ci_user:ci_pass@localhost:29003/api
 ${VALID_TIME}                       2022-01-01T00:00:00+00:00
 
-${SCAN_PROFILE_INCREMENT_QUEUE}     _dev__scan_profile_increments
-${SCAN_PROFILE_MUTATION_QUEUE}      _dev__scan_profile_mutations
+${SCAN_PROFILE_MUTATION_QUEUE}      scan_profile_mutations
 
 
 *** Keywords ***
@@ -73,7 +72,7 @@ Wait For XTDB Synced
 
 Get All Document Ids
     ${query}    Set Variable    {:query {:find [?e] :where [[?e :xt/id]]}}
-    ${headers}    Create Dictionary    Content-Type=application/edn    Accept=application/json
+    ${headers}    Create Dictionary    Content-Type=application/end    Accept=application/json
     ${response}    Post    ${XTDB_URI}/query    data=${query}    headers=${headers}
     ${rows}    Set Variable    ${response.json()}
     ${ids}    Create List
@@ -101,7 +100,6 @@ Setup Test
 Teardown Test
     Delete XTDB node
     Get Messages From Queue    octopoes    ack_requeue_false
-    Get Messages From Queue    ${SCAN_PROFILE_INCREMENT_QUEUE}    ack_requeue_false
     Get Messages From Queue    ${SCAN_PROFILE_MUTATION_QUEUE}    ack_requeue_false
     Stop Monitoring
 

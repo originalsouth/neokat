@@ -37,6 +37,21 @@ logger = structlog.get_logger(__name__)
 
 ORIGIN_MAX_AGE = timedelta(days=2)
 
+FINDING_LIST_COLUMNS = {
+    "severity": _("Severity"),
+    "finding": _("Finding"),
+    "location": _("Location"),
+    "tree": _("Tree"),
+    "graph": _("Graph"),
+}
+
+OBJECT_LIST_COLUMNS = {
+    "object": _("Object"),
+    "object_type": _("Type"),
+    "clearance_level": _("Clearance level"),
+    "clearance_type": _("Clearance type"),
+}
+
 
 @dataclass
 class HydratedFinding:
@@ -480,7 +495,7 @@ class SingleOOIMixin(OctopoesView):
 class SingleOOITreeMixin(SingleOOIMixin):
     @cached_property
     def tree(self) -> ReferenceTree:
-        return self.get_ooi_tree(depth=1)
+        return self.get_ooi_tree(depth=2)
 
     def get_depth(self):
         try:

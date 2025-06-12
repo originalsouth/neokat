@@ -15,10 +15,10 @@ from sqlalchemy.orm import sessionmaker
 
 from boefjes.app import SchedulerWorkerManager
 from boefjes.clients.bytes_client import BytesAPIClient
-from boefjes.clients.scheduler_client import Queue, SchedulerClientInterface, Task, TaskStatus
+from boefjes.clients.scheduler_client import SchedulerClientInterface, Task, TaskPop, TaskStatus
 from boefjes.config import Settings, settings
 from boefjes.dependencies.plugins import PluginService, get_plugin_service
-from boefjes.job_handler import bytes_api_client
+from boefjes.job_handler import BoefjeHandler, NormalizerHandler, bytes_api_client
 from boefjes.job_models import BoefjeMeta, NormalizerMeta
 from boefjes.katalogus.root import app
 from boefjes.local import LocalBoefjeJobRunner, LocalNormalizerJobRunner
@@ -31,7 +31,7 @@ from boefjes.local_repository import (
     get_normalizer_resource,
 )
 from boefjes.models import Organisation
-from boefjes.runtime_interfaces import Handler, WorkerManager
+from boefjes.runtime_interfaces import WorkerManager
 from boefjes.sql.config_storage import SQLConfigStorage, create_encrypter
 from boefjes.sql.db import SQL_BASE, get_engine
 from boefjes.sql.organisation_storage import SQLOrganisationStorage, get_organisations_store
@@ -50,7 +50,6 @@ from tests.loading import get_dummy_data
 class MockSchedulerClient(SchedulerClientInterface):
     def __init__(
         self,
-        queue_response: bytes,
         boefje_responses: list[bytes],
         normalizer_responses: list[bytes],
         log_path: Path,
@@ -58,7 +57,6 @@ class MockSchedulerClient(SchedulerClientInterface):
         iterations_to_wait_for_exception: int = 0,
         sleep_time: float = 0.1,
     ):
-        self.queue_response = queue_response
         self.boefje_responses = boefje_responses
         self.normalizer_responses = normalizer_responses
 
@@ -69,30 +67,31 @@ class MockSchedulerClient(SchedulerClientInterface):
         self.sleep_time = sleep_time
 
         self._iterations = 0
-        self._tasks: dict[str, Task] = multiprocessing.Manager().dict()
-        self._popped_items: dict[str, Task] = multiprocessing.Manager().dict()
-        self._pushed_items: dict[str, Task] = multiprocessing.Manager().dict()
+        self._tasks: dict[str, list[Task]] = multiprocessing.Manager().dict()
+        self._popped_items: dict[str, list[Task]] = multiprocessing.Manager().dict()
+        self._pushed_items: dict[str, list[Task]] = multiprocessing.Manager().dict()
 
-    def get_queues(self) -> list[Queue]:
-        time.sleep(self.sleep_time)
-        return TypeAdapter(list[Queue]).validate_json(self.queue_response)
-
-    def pop_item(self, queue: str) -> Task | None:
+    def pop_items(self, queue: str) -> list[Task] | None:
         time.sleep(self.sleep_time)
 
         try:
             if WorkerManager.Queue.BOEFJES.value in queue:
-                p_item = TypeAdapter(Task).validate_json(self.boefje_responses.pop(0))
-                self._popped_items[str(p_item.id)] = p_item
-                self._tasks[str(p_item.id)] = self._task_from_id(p_item.id)
-                return p_item
+                response = TypeAdapter(TaskPop).validate_json(self.boefje_responses.pop(0))
+            elif WorkerManager.Queue.NORMALIZERS.value in queue:
+                response = TypeAdapter(TaskPop).validate_json(self.normalizer_responses.pop(0))
+            else:
+                return None
 
-            if WorkerManager.Queue.NORMALIZERS.value in queue:
-                p_item = TypeAdapter(Task).validate_json(self.normalizer_responses.pop(0))
+            p_items = response.results
+
+            for p_item in p_items:
                 self._popped_items[str(p_item.id)] = p_item
                 self._tasks[str(p_item.id)] = self._task_from_id(p_item.id)
-                return p_item
+
+            return p_items
+
         except IndexError:
+            time.sleep(3 * self.sleep_time)
             raise self.raise_on_empty_queue
 
     def patch_task(self, task_id: UUID, status: TaskStatus) -> None:
@@ -114,22 +113,47 @@ class MockSchedulerClient(SchedulerClientInterface):
         return self._popped_items[str(task_id)]
 
     def push_item(self, p_item: Task) -> None:
-        self._pushed_items[str(p_item.id)] = p_item
+        self._pushed_items[str(p_item.id)] = [p_item]
 
 
-class MockHandler(Handler):
+class MockBytesAPIClient:
+    def __init__(self):
+        self.queue = Manager().Queue()
+
+    def save_boefje_meta(self, boefje_meta: BoefjeMeta) -> None:
+        self.queue.put(("save_boefje_meta", (boefje_meta.model_dump(),)))
+
+    def save_raw(self, boefje_meta_id: str, raw: str | bytes, mime_types: set[str]) -> UUID:
+        self.queue.put(("save_raw", (boefje_meta_id, raw, mime_types)))
+
+        return uuid.uuid4()
+
+    def get_all(self) -> list[BoefjeMeta | NormalizerMeta]:
+        return [self.queue.get() for _ in range(self.queue.qsize())]
+
+
+class MockHandler(BoefjeHandler, NormalizerHandler):
     def __init__(self, exception=Exception):
         self.sleep_time = 0
         self.queue = Manager().Queue()
         self.exception = exception
+        self.bytes_client = MockBytesAPIClient()
 
-    def handle(self, item: BoefjeMeta | NormalizerMeta):
+    def handle(
+        self, item: BoefjeMeta | NormalizerMeta
+    ) -> tuple[BoefjeMeta, list[tuple[set, bytes | str]]] | None | bool:
         time.sleep(self.sleep_time)
 
-        if str(item.id) == "9071c9fd-2b9f-440f-a524-ef1ca4824fd4":
+        if str(item.id) in ["9071c9fd-2b9f-440f-a524-ef1ca4824fd4", "2071c9fd-2b9f-440f-a524-ef1ca4824fd4"]:
+            time.sleep(self.sleep_time)
             raise self.exception()
 
         self.queue.put(item)
+
+        if item.boefje.id == "docker":
+            return False
+
+        return item, [({"my/mime"}, b"123")]
 
     def get_all(self) -> list[BoefjeMeta | NormalizerMeta]:
         return [self.queue.get() for _ in range(self.queue.qsize())]
@@ -151,7 +175,6 @@ def item_handler(tmp_path: Path):
 @pytest.fixture
 def manager(item_handler: MockHandler, tmp_path: Path) -> SchedulerWorkerManager:
     scheduler_client = MockSchedulerClient(
-        queue_response=get_dummy_data("scheduler/queues_response.json"),
         boefje_responses=[
             get_dummy_data("scheduler/pop_response_boefje.json"),
             get_dummy_data("scheduler/pop_response_boefje_2.json"),
@@ -161,7 +184,9 @@ def manager(item_handler: MockHandler, tmp_path: Path) -> SchedulerWorkerManager
         log_path=tmp_path / "patch_task_log",
     )
 
-    return SchedulerWorkerManager(item_handler, scheduler_client, Settings(pool_size=1, poll_interval=0.01), "DEBUG")
+    return SchedulerWorkerManager(
+        item_handler, scheduler_client, Settings(pool_size=1, poll_interval=0.01, deduplicate=True), "DEBUG"
+    )
 
 
 @pytest.fixture

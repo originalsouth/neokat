@@ -29,7 +29,8 @@ class TaskStatus(Enum):
 class Task(BaseModel):
     id: uuid.UUID
     scheduler_id: str
-    schedule_id: str | None
+    schedule_id: uuid.UUID | None = None
+    organisation: str
     priority: int
     status: TaskStatus
     type: str
@@ -39,11 +40,15 @@ class Task(BaseModel):
     modified_at: datetime.datetime
 
 
+class TaskPop(BaseModel):
+    results: list[Task]
+
+
 class SchedulerClientInterface:
     def get_queues(self) -> list[Queue]:
         raise NotImplementedError()
 
-    def pop_item(self, queue_id: str) -> Task | None:
+    def pop_items(self, scheduler_id: str) -> list[Task]:
         raise NotImplementedError()
 
     def patch_task(self, task_id: uuid.UUID, status: TaskStatus) -> None:
@@ -66,20 +71,15 @@ class SchedulerAPIClient(SchedulerClientInterface):
     def _verify_response(response: Response) -> None:
         response.raise_for_status()
 
-    def get_queues(self) -> list[Queue]:
-        response = self._session.get("/queues")
+    def pop_items(self, scheduler_id: str) -> list[Task]:
+        response = self._session.post(f"/schedulers/{scheduler_id}/pop?limit=1")
         self._verify_response(response)
 
-        return TypeAdapter(list[Queue]).validate_json(response.content)
-
-    def pop_item(self, queue_id: str) -> Task | None:
-        response = self._session.post(f"/queues/{queue_id}/pop")
-        self._verify_response(response)
-
-        return TypeAdapter(Task | None).validate_json(response.content)
+        popped_tasks = TypeAdapter(TaskPop | None).validate_json(response.content)
+        return popped_tasks.results
 
     def push_item(self, p_item: Task) -> None:
-        response = self._session.post(f"/queues/{p_item.scheduler_id}/push", content=p_item.model_dump_json())
+        response = self._session.post(f"/schedulers/{p_item.scheduler_id}/push", content=p_item.model_dump_json())
         self._verify_response(response)
 
     def patch_task(self, task_id: uuid.UUID, status: TaskStatus) -> None:

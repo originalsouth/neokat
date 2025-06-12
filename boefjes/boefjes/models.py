@@ -1,5 +1,6 @@
 import datetime
 from enum import Enum
+from functools import total_ordering
 from typing import Literal
 
 from croniter import croniter
@@ -8,9 +9,22 @@ from jsonschema.validators import Draft202012Validator
 from pydantic import BaseModel, Field, field_validator
 
 
+# This makes the RunOn sortable when in a list. This is convenient for e.g. the RunOnDB.from_run_ons method, that now
+# does not have to take the ordering of a boefje.run_on into account in its match statement. This is especially handy
+# once we introduce more RunOn values such as DELETE.
+@total_ordering
+class RunOn(Enum):
+    CREATE = "create"
+    UPDATE = "update"
+
+    def __lt__(self, other):
+        return self.value < other.value
+
+
 class Organisation(BaseModel):
     id: str
     name: str
+    deduplicate: bool = True
 
 
 class Plugin(BaseModel):
@@ -34,9 +48,11 @@ class Boefje(Plugin):
     boefje_schema: dict | None = None
     cron: str | None = None
     interval: int | None = None
+    run_on: list[RunOn] | None = None
     runnable_hash: str | None = None
     oci_image: str | None = None
     oci_arguments: list[str] = Field(default_factory=list)
+    deduplicate: bool = True
 
     @field_validator("boefje_schema")
     @classmethod
@@ -59,6 +75,17 @@ class Boefje(Plugin):
 
     class Config:
         validate_assignment = True
+
+
+class BoefjeConfig(BaseModel):
+    id: int
+    settings: dict
+    enabled: bool
+    boefje_id: str
+    organisation_id: str
+
+    # a list of BoefjeConfig from other orgs that matching this config
+    duplicates: list["BoefjeConfig"] = Field(default_factory=list)
 
 
 class Normalizer(Plugin):
@@ -93,6 +120,8 @@ class FilterParameters(BaseModel):
     q: str | None = None
     type: Literal["boefje", "normalizer", "bit"] | None = None
     ids: list[str] | None = None
+    consumes: set[str] | None = None
+    produces: set[str] | None = None
     state: bool | None = None
     scan_level: int = 0
     oci_image: str | None = None

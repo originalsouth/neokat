@@ -20,8 +20,9 @@ class ScheduleStore:
     def get_schedules(
         self,
         scheduler_id: str | None = None,
+        organisation: str | None = None,
         schedule_hash: str | None = None,
-        enabled: bool | None = True,  # FIXME: None?
+        enabled: bool | None = None,
         min_deadline_at: datetime | None = None,
         max_deadline_at: datetime | None = None,
         min_created_at: datetime | None = None,
@@ -35,6 +36,9 @@ class ScheduleStore:
 
             if scheduler_id is not None:
                 query = query.filter(models.ScheduleDB.scheduler_id == scheduler_id)
+
+            if organisation is not None:
+                query = query.filter(models.ScheduleDB.organisation == organisation)
 
             if enabled is not None:
                 query = query.filter(models.ScheduleDB.enabled == enabled)
